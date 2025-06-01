@@ -101,7 +101,7 @@ class Agent():
 
         for episode in itertools.count():
             state , _ = env.reset()
-            state = torch.tensor(state, dtype=torch.float32, device=device).flatten() # Convert state to tensor directly on device
+            state = torch.tensor(state, dtype=torch.float, device=device) # Convert state to tensor directly on device
             terminated = False
             episode_reward = 0.0
             while(not terminated and episode_reward < self.stop_on_reward):
@@ -119,8 +119,9 @@ class Agent():
                 
                 episode_reward += reward
 
-                new_state = torch.tensor(new_state,dtype=torch.float32, device = device).flatten()
-                reward = torch.tensor(reward,dtype=torch.float, device = device)
+                # FIX: Convert to tensor with proper shape
+                new_state = torch.tensor(new_state, dtype=torch.float, device=device)
+                reward = torch.tensor(reward, dtype=torch.float, device=device)
 
 
                 if is_training:
@@ -147,7 +148,7 @@ class Agent():
                 # Update graph every x seconds
                 current_time = datetime.now()
                 if current_time - last_graph_update_time > timedelta(seconds=10):
-                    self.save_graph(rewards_per_episode, epsilon_history)
+                    self.save_graph(reward_per_episode, epsilon_history)
                     last_graph_update_time = current_time
                 if len(memory) > self.mini_batch_size:
                     mini_batch = memory.sample(self.mini_batch_size)
@@ -160,14 +161,14 @@ class Agent():
                         target_dqn.load_state_dict(policy_dqn.state_dict())
                         step_count = 0
     
-    def save_graph(self, rewards_per_episode, epsilon_history):
+    def save_graph(self, reward_per_episode, epsilon_history):
         # Save plots
         fig = plt.figure(1)
 
         # Plot average rewards (Y-axis) vs episodes (X-axis)
-        mean_rewards = np.zeros(len(rewards_per_episode))
+        mean_rewards = np.zeros(len(reward_per_episode))
         for x in range(len(mean_rewards)):
-            mean_rewards[x] = np.mean(rewards_per_episode[max(0, x-99):(x+1)])
+            mean_rewards[x] = np.mean(reward_per_episode[max(0, x-99):(x+1)])
         plt.subplot(121) # plot on a 1 row x 2 col grid, at cell 1
         # plt.xlabel('Episodes')
         plt.ylabel('Mean Rewards')
@@ -186,25 +187,23 @@ class Agent():
         plt.close(fig)
 
     def optimize(self,mini_batch,policy_dqn,target_dqn):
-        states , actions , new_states , rewards , terminations = zip(*mini_batch)
+        states, actions, rewards, new_states, terminations = zip(*mini_batch)
 
-         # Debug print
-        for i, ns in enumerate(new_states[:5]):
-            print(f"new_state[{i}] type: {type(ns)} shape: {ns.shape if isinstance(ns, torch.Tensor) else 'NA'}")
-
-
+        # Debug: Check shapes before stacking
+        print("Debug - tensor shapes before stacking:")
+        print(f"  states[0]: shape={states[0].shape}, type={type(states[0])}")
+        print(f"  new_states[0]: shape={new_states[0].shape}, type={type(new_states[0])}")
+        print(f"  actions[0]: shape={actions[0].shape}, type={type(actions[0])}")
+        print(f"  rewards[0]: shape={rewards[0].shape}, type={type(rewards[0])}")
+        
+        # Stack tensors properly
         states = torch.stack(states)
-
         actions = torch.stack(actions)
-
-        new_states = torch.stack(new_states , dim=1)
-
-        print("states shape:", states.shape)
-        print("new_states shape:", new_states.shape)
-
-
+        new_states = torch.stack(new_states)  # This should now work correctly
         rewards = torch.stack(rewards)
-        terminations = torch.tensor(terminations).float().to(device)
+        terminations = torch.tensor(terminations, dtype=torch.float, device=device)
+        
+        print(f"After stacking - new_states shape: {new_states.shape}")
 
         with torch.no_grad():
             target_q = rewards + (1-terminations) * self.discount_factor * target_dqn(new_states).max(dim=1)[0]
