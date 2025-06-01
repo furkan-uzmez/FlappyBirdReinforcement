@@ -24,6 +24,7 @@ matplotlib.use('Agg')
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+#device = "cpu"
 
 class Agent():
     def __init__(self,hyperparameter_set):
@@ -54,6 +55,9 @@ class Agent():
         self.LOG_FILE = os.path.join(RUNS_DIR,f"{self.hyperparameter_set}.log")
         self.MODEL_FILE = os.path.join(RUNS_DIR,f"{self.hyperparameter_set}.pt")
         self.GRAPH_FILE = os.path.join(RUNS_DIR,f"{self.hyperparameter_set}.png")
+
+        self.enable_double_dqn  = hyperparameters['enable_double_dqn']      # double dqn on/off flag
+        self.enable_dueling_dqn = hyperparameters['enable_dueling_dqn']     # dueling dqn on/off flag
 
  
     def run(self,is_training=True , render=False):
@@ -206,7 +210,13 @@ class Agent():
         print(f"After stacking - new_states shape: {new_states.shape}")
 
         with torch.no_grad():
-            target_q = rewards + (1-terminations) * self.discount_factor * target_dqn(new_states).max(dim=1)[0]
+             if self.enable_double_dqn:
+                best_actions_from_policy = policy_dqn(new_states).argmax(dim=1)
+
+                target_q = rewards + (1-terminations) * self.discount_factor * target_dqn(new_states).gather(dim=1, index=best_actions_from_policy.unsqueeze(dim=1)).squeeze()
+             else:
+                # Calculate target Q values (expected returns)
+                target_q = rewards + (1-terminations) * self.discount_factor * target_dqn(new_states).max(dim=1)[0]
 
         current_q = policy_dqn(states).gather(dim=1,index=actions.unsqueeze(dim=1)).squeeze() 
         
@@ -224,6 +234,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     dql = Agent(hyperparameter_set=args.hyperparameters)
+    
+    
+    # python main.py cartpole1 --train
+
+
 
     if args.train:
         dql.run(is_training=True)
