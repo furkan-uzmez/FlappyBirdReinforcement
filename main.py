@@ -2,7 +2,7 @@ import flappy_bird_gymnasium
 import gymnasium
 import torch
 from dqn import DQN
-from experience_replay import ReplayMemory
+from experience_replay import PrioritizedReplayMemory
 import itertools
 import yaml
 import random
@@ -59,8 +59,12 @@ class Agent():
         self.enable_double_dqn  = hyperparameters['enable_double_dqn']      # double dqn on/off flag
         self.enable_dueling_dqn = hyperparameters['enable_dueling_dqn']     # dueling dqn on/off flag
 
+
+        self.per_beta = hyperparameters.get('per_beta', 0.4)
+        self.per_alpha = hyperparameters.get('per_alpha', 0.6)
+
  
-    def run(self,is_training=True , render=False):
+    def run(self,is_training=True , render=True):
         if is_training:
             start_time = datetime.now()
             last_graph_update_time = start_time
@@ -82,7 +86,7 @@ class Agent():
 
 
         if is_training:
-            memory = ReplayMemory(self.replay_memory_size)
+            memory = PrioritizedReplayMemory(self.replay_memory_size, alpha=self.per_alpha)
             epsilon = self.epsilon_init
             
             
@@ -111,7 +115,7 @@ class Agent():
             while(not terminated and episode_reward < self.stop_on_reward):
                 # Next action:
                 # (feed the observation to your agent here)
-                if is_training and random.random() < epsilon :
+                if is_training and random.random() < epsilon:
                     action = env.action_space.sample()
                     action = torch.tensor(action, dtype=torch.int64, device=device)
                 else:
@@ -155,8 +159,9 @@ class Agent():
                     self.save_graph(reward_per_episode, epsilon_history)
                     last_graph_update_time = current_time
                 if len(memory) > self.mini_batch_size:
-                    mini_batch = memory.sample(self.mini_batch_size)
-                    self.optimize(mini_batch,policy_dqn,target_dqn)
+                    mini_batch, indices, weights = memory.sample(self.mini_batch_size, beta=self.per_beta)
+                    self.optimize(mini_batch, weights, indices, memory, policy_dqn, target_dqn)
+
 
                     epsilon = max(epsilon * self.epsilon_decay , self.epsilon_min)
                     epsilon_history.append(epsilon)
@@ -190,24 +195,25 @@ class Agent():
         fig.savefig(self.GRAPH_FILE)
         plt.close(fig)
 
-    def optimize(self,mini_batch,policy_dqn,target_dqn):
+    def optimize(self, mini_batch, weights, indices, memory, policy_dqn, target_dqn):
         states, actions, rewards, new_states, terminations = zip(*mini_batch)
 
         # Debug: Check shapes before stacking
+        """
         print("Debug - tensor shapes before stacking:")
         print(f"  states[0]: shape={states[0].shape}, type={type(states[0])}")
         print(f"  new_states[0]: shape={new_states[0].shape}, type={type(new_states[0])}")
         print(f"  actions[0]: shape={actions[0].shape}, type={type(actions[0])}")
         print(f"  rewards[0]: shape={rewards[0].shape}, type={type(rewards[0])}")
-        
+        """
         # Stack tensors properly
         states = torch.stack(states)
         actions = torch.stack(actions)
-        new_states = torch.stack(new_states)  # This should now work correctly
+        new_states = torch.stack(new_states)  
         rewards = torch.stack(rewards)
         terminations = torch.tensor(terminations, dtype=torch.float, device=device)
         
-        print(f"After stacking - new_states shape: {new_states.shape}")
+        #print(f"After stacking - new_states shape: {new_states.shape}")
 
         with torch.no_grad():
              if self.enable_double_dqn:
@@ -219,14 +225,20 @@ class Agent():
                 target_q = rewards + (1-terminations) * self.discount_factor * target_dqn(new_states).max(dim=1)[0]
 
         current_q = policy_dqn(states).gather(dim=1,index=actions.unsqueeze(dim=1)).squeeze() 
+
+        td_errors = (current_q - target_q).detach().abs() + 1e-5
+
+        # Update priorities
+        memory.update_priorities(indices, td_errors.cpu().numpy())
         
-        loss = self.loss_fn(current_q,target_q)
+        loss = (self.loss_fn(current_q, target_q) * weights).mean()
 
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
 if __name__ == '__main__':
+    print('Device : ',device)
      # Parse command line inputs
     parser = argparse.ArgumentParser(description='Train or test model.')
     parser.add_argument('hyperparameters', help='')
