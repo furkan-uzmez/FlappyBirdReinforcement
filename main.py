@@ -108,6 +108,11 @@ class Agent():
             policy_dqn.eval()
 
         for episode in itertools.count():
+
+            if episode % 1000 == 0:
+                print("Episode : ",episode)
+                #print("Epsilon : ",epsilon)
+
             state , _ = env.reset()
             state = torch.tensor(state, dtype=torch.float, device=device) # Convert state to tensor directly on device
             terminated = False
